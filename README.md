@@ -9,7 +9,7 @@ Jev makes the decisions (typed Choices over the page's actions, with probabiliti
 
 ## Install
 
-Requires Node.js 20 or newer, a TypeSafe API key from [console.typesafe.ai/settings/keys](https://console.typesafe.ai/settings/keys), and optionally a key for any typing provider. Playwright's Chromium downloads automatically on install; set `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD=1` to opt out.
+The package installs from GitHub; it is not published to npm. Requires Node.js 20 or newer, a TypeSafe API key from [console.typesafe.ai/settings/keys](https://console.typesafe.ai/settings/keys), and optionally a key for any typing provider. Playwright's Chromium downloads automatically on install; set `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD=1` to opt out.
 
 Amp:
 
@@ -63,6 +63,8 @@ Some MCP clients filter the environment before spawning servers, which silently 
 
 ## The tool
 
+Every run makes paid TypeSafe API calls, typically a fraction of a cent, plus one small paid call per typed field when a typing provider is configured. The example below is a real run.
+
 ```jsonc
 // arguments
 {
@@ -100,7 +102,8 @@ Statuses: `done` (agent chose to stop), `goal_achieved` (the goal watcher fired)
 
 ## Limits
 
-- Up to 240 elements per step; Jev's Choice supports 255 options. Beyond that the list is truncated and the state says so, which can hide the needed element on very dense pages. Two-stage selection is planned.
+- Up to 240 elements per step; Jev's Choice supports 255 options. Beyond that the list is truncated and the state says so, which can hide the needed element on very dense pages.
+- The markdown format converts the whole body, so it carries navigation chrome and can include inline script text; a readability pass is a candidate improvement, not a committed one.
 - Password and file inputs are never offered. Hover-revealed menus, keyboard actions (Escape, Enter on unstaged fields), multi-field form sequencing, shadow DOM, and iframes are out of scope for v0.1.
 - Thresholds (0.85 goal, 0.85 stuck, budgets) are starting points measured on Wikipedia and DuckDuckGo tasks. Tune them for your sites.
 - Jev is calibrated, not infallible. Treat the trace as evidence, not proof.
