@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Published to npm as `@jkudish/jev-browser` (the unscoped `jev-browser` name belongs to another project).
+- Documentation: typing-model guide, result and trace walkthrough, SECURITY.md, agent-install prompt.
+
 ## 0.1.0
 
 Initial release.

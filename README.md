@@ -3,56 +3,70 @@
 [![CI](https://github.com/jkudish/jev-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/jkudish/jev-browser/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-jev-browser gives agents one MCP tool, `jev_navigate`: pass a task and a start URL, and a [Jev](https://docs.typesafe.ai)-driven agent navigates a real headless browser until the goal is met or a safety gate fires. It returns the final page, the full step trace with confidences, console and network errors captured along the way, token usage with estimated cost, and a screenshot.
+Give jev-browser a task and a URL.
 
-Jev makes the decisions (typed Choices over the page's actions, with probabilities and confidence); code owns the loop (budgets, recovery, stop gates). Free-form typing goes through a small model of your choice, because Jev does not generate strings. A typical run finishes in seconds for well under a cent.
+It drives a real headless browser through an MCP server, CLI, or library. TypeSafe's Jev model picks one action per step from the page's clickable, typeable, and selectable elements, and scores how likely it is that the goal is met or the run is stuck. Code owns the loop: budgets, recovery, stop gates. You get the final page, a step trace with confidences, console errors, and a screenshot.
+
+A Wikipedia navigation finishes in 3 to 5 seconds for about $0.0016. It has filled a contact form without submitting it, pulled a price off a live pricing page, and returned a guide as markdown. This is early software. Expect rough edges on harder sites.
 
 ## Install
 
-The package installs from GitHub; it is not published to npm. Requires Node.js 20 or newer, a TypeSafe API key from [console.typesafe.ai/settings/keys](https://console.typesafe.ai/settings/keys), and optionally a key for any typing provider. Playwright's Chromium downloads automatically on install; set `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD=1` to opt out.
+Requires Node.js 20 or newer, a TypeSafe API key from [console.typesafe.ai/settings/keys](https://console.typesafe.ai/settings/keys), and optionally a key for a typing provider (see [the typing model](#the-typing-model)). Playwright's Chromium downloads automatically on install; set `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD=1` to opt out.
 
-Amp:
-
-```bash
-amp mcp add jev-browser -- npx -y github:jkudish/jev-browser
-```
-
-Claude Code:
+From npm:
 
 ```bash
-claude mcp add jev-browser -- npx -y github:jkudish/jev-browser
+npx -y @jkudish/jev-browser --help
 ```
 
-Codex (`~/.codex/config.toml`):
+From GitHub, if you want a specific commit or no npm dependency:
+
+```bash
+npx -y github:jkudish/jev-browser --help
+```
+
+### Amp
+
+```bash
+amp mcp add jev-browser -- npx -y @jkudish/jev-browser
+```
+
+### Claude Code
+
+```bash
+claude mcp add jev-browser -- npx -y @jkudish/jev-browser
+```
+
+### Codex (`~/.codex/config.toml`)
 
 ```toml
 [mcp_servers.jev-browser]
 command = "npx"
-args = ["-y", "github:jkudish/jev-browser"]
+args = ["-y", "@jkudish/jev-browser"]
 ```
 
-OpenCode (`opencode.json`):
+### OpenCode (`opencode.json`)
 
 ```json
 {
   "mcp": {
     "jev-browser": {
       "type": "local",
-      "command": ["npx", "-y", "github:jkudish/jev-browser"],
+      "command": ["npx", "-y", "@jkudish/jev-browser"],
       "environment": { "TYPESAFE_API_KEY": "ts_..." }
     }
   }
 }
 ```
 
-Any other MCP client:
+### Any other MCP client
 
 ```json
 {
   "mcpServers": {
     "jev-browser": {
       "command": "npx",
-      "args": ["-y", "github:jkudish/jev-browser"],
+      "args": ["-y", "@jkudish/jev-browser"],
       "env": { "TYPESAFE_API_KEY": "ts_..." }
     }
   }
@@ -60,6 +74,18 @@ Any other MCP client:
 ```
 
 Some MCP clients filter the environment before spawning servers, which silently drops `TYPESAFE_API_KEY`. If the server reports a missing key, pass it explicitly as shown above.
+
+### Let an agent install it for you
+
+Paste this into your coding agent:
+
+```text
+Install jev-browser as an MCP server for me. Run `amp mcp add jev-browser -- npx -y @jkudish/jev-browser`
+(or the Claude Code / Codex / OpenCode equivalent from the README). I will put a TypeSafe API key from
+console.typesafe.ai/settings/keys into the server environment as TYPESAFE_API_KEY. When it's registered,
+verify with one navigation task on a public site and show me the step trace and cost.
+Full instructions: https://github.com/jkudish/jev-browser#readme
+```
 
 ## The tool
 
@@ -88,9 +114,22 @@ Every run makes paid TypeSafe API calls, typically a fraction of a cent, plus on
 }
 ```
 
-The full result also carries `final_title`, the page payload in your chosen `format`, per-step `goal_done` and `stuck` probabilities, captured console/page/network errors, and the final screenshot as an image block.
+Parameters: `max_steps` (default 24), `max_seconds` (default 180), `allow_typing` (default true), `format` (`text`, `markdown`, `html`, `aria`), `max_chars` (override the cap), `screenshot` (`final`, default, or `none`).
 
-Parameters: `max_steps` (default 24), `max_seconds` (default 180), `allow_typing` (default true), `format` (`text` 8k chars default, `markdown` 16k, `html` 1MB, `aria` 16k), `max_chars` (override the cap), `screenshot` (`final`, default, or `none`).
+## What you get back
+
+**The final page, in the format you ask for.** Every payload reports `truncated` and `true_length`, and `max_chars` overrides any default.
+
+| Format | Default cap | Best for |
+| --- | --- | --- |
+| `text` | 8,000 chars | Feeding the page to Jev or an LLM next; quick reads |
+| `markdown` | 16,000 chars | Readable artifacts and notes; carries navigation chrome |
+| `html` | 1 MB | Parsing the page yourself with your own selectors |
+| `aria` | 16,000 chars | The accessibility tree as YAML; what screen readers and agents see |
+
+**A final screenshot.** A viewport JPEG that renders inline in MCP clients, or lands as a file with the CLI's `--screenshot path.jpg`. Pass `screenshot: "none"` to skip it.
+
+**A debug trace you can audit.** One record per step: the proposed action versus the action actually executed, why a recovery fired, action errors, the Choice confidence, the top option's probability, and the goal and stuck probabilities for that step. Stop statuses say which gate fired. Alongside the trace: console errors, page errors, and failed network requests captured per step and tagged with the page they came from, up to 200 events, plus Jev call counts, token usage, and estimated cost. If the final payload or screenshot could not be extracted, the run still returns and lists the problem under `extraction_problems`.
 
 ## How it decides
 
@@ -99,6 +138,34 @@ Each step makes one primary Jev call with three questions over the same state: a
 Stop conditions, in code, checked before executing the step's proposed action: the agent chooses `done`, goal probability > 0.85, stuck probability > 0.85, the step budget, or the time budget. A repeated action with no effect switches to the next-best option from the Choice distribution. There is deliberately no low-confidence override: split probability across several similar elements is usually several acceptable alternatives, not uncertainty.
 
 Statuses: `done` (agent chose to stop), `goal_achieved` (the goal watcher fired), `stuck`, `max_steps`, `timeout`, `error`. `done` and `goal_achieved` are two independent judgments; agreement between them is what a trustworthy finish looks like, and the trace shows both at every step.
+
+## The typing model
+
+Jev never generates text. It returns typed decisions only: which option, with what probabilities. So when a task needs a string, typing a search query or filling a field, that string comes from a small model you choose. This is the only place a second model is involved, and it runs at most once or twice per task, about 48 tokens per call.
+
+Configuration is automatic when possible. The server picks the first provider whose key it recognizes, in this order:
+
+| Provider | Recognized by | Default model |
+| --- | --- | --- |
+| OpenAI | `OPENAI_API_KEY` starting with `sk-` | `gpt-5.6-luna` |
+| OpenRouter | `OPENROUTER_API_KEY` starting with `sk-or-` | `openai/gpt-5.6-luna` |
+| Anthropic | `ANTHROPIC_API_KEY` starting with `sk-ant-` | `claude-haiku-4.5` |
+| Google | `GEMINI_API_KEY` or `GOOGLE_GENERATIVE_AI_API_KEY` starting with `AIza` | `gemini-2.5-flash` |
+
+Overrides:
+
+- `JEV_BROWSER_TYPE_MODEL` picks any model the resolved provider offers, for example `openrouter:anthropic/claude-haiku-4.5` style ids.
+- `JEV_BROWSER_TYPE_PROVIDER` forces one of `openai`, `openrouter`, `anthropic`, `google`, skipping auto-detection.
+- `JEV_BROWSER_TYPE_BASE_URL` (plus `JEV_BROWSER_TYPE_API_KEY` if it needs one) points at any OpenAI-compatible endpoint: Ollama, LM Studio, vLLM, a gateway. This wins over provider detection.
+
+Local example, no cloud key at all:
+
+```bash
+JEV_BROWSER_TYPE_BASE_URL=http://localhost:11434/v1 JEV_BROWSER_TYPE_MODEL=qwen2.5:7b \
+  npx -y @jkudish/jev-browser run "Search Wikipedia for Ristretto and stop on the article" https://en.wikipedia.org/wiki/Main_Page
+```
+
+With no provider at all, typing falls back to a keyword heuristic built from the task text. It is labeled honestly in the trace (`via keyword-heuristic`), and it is meaningfully worse: in testing its queries buried a target article eight results pages deep. Give it a real model if your tasks type anything.
 
 ## Limits
 
@@ -114,13 +181,9 @@ Statuses: `done` (agent chose to stop), `goal_achieved` (the goal watcher fired)
 | --- | --- | --- |
 | `TYPESAFE_API_KEY` | none | Required. |
 | `JEV_BROWSER_MODEL` | `jev-latest` | Pin a Jev version. |
-| `JEV_BROWSER_TYPE_PROVIDER` | auto | `openai`, `openrouter`, `anthropic`, `google`; auto-detected from key shape when unset. |
-| `JEV_BROWSER_TYPE_MODEL` | per provider | Override the typing model (`gpt-5.6-luna`, `openai/gpt-5.6-luna`, ...). |
-| `JEV_BROWSER_TYPE_BASE_URL` | none | Use any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM); wins over provider detection. Pair with `JEV_BROWSER_TYPE_API_KEY` if needed. |
+| `JEV_BROWSER_TYPE_*` | see above | Typing provider, model, and endpoint. |
 | `JEV_BROWSER_HEADED` | unset | Set to `1` to watch the browser. |
 | `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD` | unset | Set to `1` to skip the Chromium postinstall. |
-
-Without any typing-provider key, typing falls back to a keyword heuristic and says so in the trace (`via keyword-heuristic`); expect worse queries.
 
 ## Development
 
@@ -131,7 +194,7 @@ npm test            # unit tests, offline
 npm run test:e2e    # live navigation tests; requires TYPESAFE_API_KEY
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## License
 
