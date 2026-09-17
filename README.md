@@ -1,7 +1,9 @@
-# jev-browser
+# Jev Browser
 
 [![CI](https://github.com/jkudish/jev-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/jkudish/jev-browser/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+Fast and very cheap browser use using TypeSafe's Jev model.
 
 Give jev-browser a task and a URL.
 
@@ -37,12 +39,6 @@ From npm:
 
 ```bash
 npx -y @jkudish/jev-browser --help
-```
-
-From GitHub, if you want a specific commit or no npm dependency:
-
-```bash
-npx -y github:jkudish/jev-browser --help
 ```
 
 ### Amp
