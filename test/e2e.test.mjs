@@ -61,7 +61,8 @@ test("click-navigation: Coffee -> Espresso", { skip: !hasKey }, async () => {
     assert.match(body.final_url, /\/wiki\/Espresso/);
     assert.ok(body.usage.jev_calls >= 2);
     assert.ok(Array.isArray(body.console_events));
-    assert.ok(body.screenshot_base64_jpeg || body.page);
+    // The screenshot travels as a separate MCP image block, not in the JSON.
+    assert.ok(result.content.some((b) => b.type === "image"), "expected a screenshot image block");
   });
 });
 
@@ -107,8 +108,11 @@ test("clean termination on a hard page (informational)", { skip: !hasKey }, asyn
       `unexpected status ${body.status}`,
     );
     // DOM-first extraction should see DuckDuckGo's search input even though its
-    // accessibility tree does not expose one.
-    const typed = body.steps.some((s) => s.action.startsWith("type_") || /typed "/.test(s.detail));
-    assert.ok(typed, "expected the agent to find and use the search input");
+    // accessibility tree does not expose one. DuckDuckGo intermittently serves
+    // a bot-challenge page (50x-tq.html); when it does, clean termination is
+    // the most this test can demand.
+    const typedOk = body.steps.some((s) => /typed "/.test(s.detail ?? "") && !s.action_error);
+    const challenged = /50x|anomaly|challenge/i.test(body.final_url ?? "") || /50x/.test(body.final_title ?? "");
+    assert.ok(typedOk || challenged, "expected successful typing or a DuckDuckGo challenge page");
   });
 });

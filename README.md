@@ -78,9 +78,9 @@ Some MCP clients filter the environment before spawning servers, which silently 
   "final_url": "https://en.wikipedia.org/wiki/Ristretto",
   "elapsed_ms": 5894,
   "steps": [
-    { "step": 1, "action": "click_e2", "detail": "a \"Search Wikipedia [f]\" -> /wiki/Special:Search", "confidence": 1.0 },
-    { "step": 2, "action": "type_e1", "detail": "typed \"Ristretto\" via openrouter", "confidence": 0.99 },
-    { "step": 3, "action": "done", "detail": "agent declared done", "confidence": 1.0 }
+    { "step": 1, "proposed_action": "click_e2", "executed_action": "click_e2", "detail": "a \"Search Wikipedia [f]\" -> /wiki/Special:Search", "confidence": 1.0 },
+    { "step": 2, "proposed_action": "type_e1", "executed_action": "type_e1", "detail": "typed \"Ristretto\" via openrouter", "confidence": 0.99 },
+    { "step": 3, "proposed_action": "done", "executed_action": null, "detail": "done proposed; not executed", "confidence": 1.0 }
   ],
   "usage": { "jev_calls": 3, "input_tokens": 45810, "est_cost_usd": 0.0021 }
 }
@@ -92,9 +92,9 @@ Parameters: `max_steps` (default 24), `max_seconds` (default 180), `allow_typing
 
 ## How it decides
 
-Each step is one Jev call with three questions over the same state: an action Choice over the page's interactive elements plus scroll/back/done, a goal Noul, and a stuck Noul ([fan-out pattern](https://docs.typesafe.ai/patterns/fan-out.md)). Elements come from the DOM directly, not the accessibility tree, because accessibility trees under-report inputs; the agent found DuckDuckGo's search box only after this switch. Actions: click, type, select a native dropdown (a second Choice picks the option), scroll, back, done.
+Each step makes one primary Jev call with three questions over the same state: an action Choice over the page's interactive elements plus scroll/back/done, a goal Noul, and a stuck Noul ([fan-out pattern](https://docs.typesafe.ai/patterns/fan-out.md)). The state includes a short excerpt of the page's visible text, so the goal judgment can see content, not just URLs and links. A select action adds one second-stage Choice for its option. Elements come from the DOM directly, not the accessibility tree, because accessibility trees under-report inputs; the agent found DuckDuckGo's search box only after this switch. Actions: click, type, select a native dropdown, scroll, back, done.
 
-Stop conditions, in code: the agent chooses `done`, goal probability > 0.85, stuck probability > 0.85, the step budget, or the time budget. A repeated action with no effect switches to the next-best option from the Choice distribution. There is deliberately no low-confidence override: split probability across several similar elements is usually several acceptable alternatives, not uncertainty.
+Stop conditions, in code, checked before executing the step's proposed action: the agent chooses `done`, goal probability > 0.85, stuck probability > 0.85, the step budget, or the time budget. A repeated action with no effect switches to the next-best option from the Choice distribution. There is deliberately no low-confidence override: split probability across several similar elements is usually several acceptable alternatives, not uncertainty.
 
 Statuses: `done` (agent chose to stop), `goal_achieved` (the goal watcher fired), `stuck`, `max_steps`, `timeout`, `error`. `done` and `goal_achieved` are two independent judgments; agreement between them is what a trustworthy finish looks like, and the trace shows both at every step.
 

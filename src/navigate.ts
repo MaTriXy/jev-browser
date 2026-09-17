@@ -1,4 +1,8 @@
 // The navigation loop. Code owns control flow; Jev owns the judgments.
+// Hardening pass applied per external review: stop gates run BEFORE action
+// execution, the deadline is a real AbortSignal threaded through Jev, the
+// typing generator, and every Playwright timeout, usage is per-run, and the
+// final payload/screenshot extraction is best-effort.
 import { chromium, type Browser, type Page } from "playwright";
 import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
@@ -12,7 +16,6 @@ import {
   buildActionSpace,
   buildCriteria,
   heuristicQuery,
-  MAX_ELEMENTS,
   pickAlternate,
   PRICE_PER_MTOK_IN,
   RawElement,
@@ -22,6 +25,7 @@ import { selectOptionQuestion, stepQuestions } from "./questions.js";
 
 const MODEL = process.env.JEV_BROWSER_MODEL ?? "jev-latest";
 const MAX_CONSOLE_EVENTS = 200;
+const STATE_EXCERPT_CHARS = 1_500;
 
 export interface NavigateOptions {
   task: string;
@@ -36,10 +40,14 @@ export interface NavigateOptions {
 
 export interface StepRecord {
   step: number;
-  action: string;
+  proposed_action: string;
+  executed_action: string | null; // null when a watcher stopped the loop before execution
   detail: string;
+  recovery_reason?: string;
+  action_error?: string;
   outcome: string;
   confidence: number | null;
+  top_probability: number | null;
   goal_done: number;
   stuck: number;
 }
@@ -48,6 +56,14 @@ export interface ConsoleEvent {
   step: number;
   type: "console_error" | "console_warning" | "page_error" | "request_failed";
   text: string;
+  page: string;
+}
+
+export interface JevUsage {
+  jev_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  est_cost_usd: number;
 }
 
 const DEFAULT_CAPS: Record<string, number> = {
@@ -57,9 +73,36 @@ const DEFAULT_CAPS: Record<string, number> = {
   aria: 16_000,
 };
 
-const jev = new TypeSafeClient();
 const turndown = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced" });
 turndown.use(gfm.gfm);
+
+// Lazy so a missing API key produces a structured error from a call, not a
+// server that never starts.
+let jevClient: TypeSafeClient | null = null;
+function jev(): TypeSafeClient {
+  jevClient ??= new TypeSafeClient();
+  return jevClient;
+}
+
+interface RunBudget {
+  usage: JevUsage;
+  signal: AbortSignal;
+  deadlineAt: number; // performance.now() milliseconds
+}
+
+async function askJev(budget: RunBudget, state: unknown, questions: Record<string, unknown>) {
+  const response = await (
+    jev().systemOne as unknown as (
+      payload: { state: unknown; questions: Record<string, unknown>; model?: string },
+      options?: { signal?: AbortSignal },
+    ) => Promise<any>
+  )({ state, questions, model: MODEL }, { signal: budget.signal });
+  budget.usage.jev_calls += 1;
+  budget.usage.input_tokens += response.usage?.input_tokens ?? 0;
+  budget.usage.output_tokens += response.usage?.output_tokens ?? 0;
+  budget.usage.est_cost_usd = (budget.usage.input_tokens / 1e6) * PRICE_PER_MTOK_IN;
+  return response.answers;
+}
 
 // ── Typing generator: provider-agnostic via the Vercel AI SDK ────────────────
 function resolveGeneratorModel(): { model: Parameters<typeof generateText>[0]["model"]; label: string } | null {
@@ -87,7 +130,12 @@ function resolveGeneratorModel(): { model: Parameters<typeof generateText>[0]["m
     {
       provider: "openrouter",
       test: /^sk-or-/,
-      make: (m) => createOpenAICompatible({ name: "openrouter", baseURL: "https://openrouter.ai/api/v1", apiKey: process.env.OPENROUTER_API_KEY! })(m),
+      make: (m) =>
+        createOpenAICompatible({
+          name: "openrouter",
+          baseURL: "https://openrouter.ai/api/v1",
+          apiKey: process.env.OPENROUTER_API_KEY!,
+        })(m),
       defaultModel: "openai/gpt-5.6-luna",
     },
     {
@@ -111,10 +159,13 @@ function resolveGeneratorModel(): { model: Parameters<typeof generateText>[0]["m
 
   for (const candidate of ordered) {
     const key =
-      candidate.provider === "openai" ? (process.env.OPENAI_API_KEY ?? "") :
-      candidate.provider === "openrouter" ? (process.env.OPENROUTER_API_KEY ?? "") :
-      candidate.provider === "anthropic" ? (process.env.ANTHROPIC_API_KEY ?? "") :
-      (process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GEMINI_API_KEY ?? "");
+      candidate.provider === "openai"
+        ? (process.env.OPENAI_API_KEY ?? "")
+        : candidate.provider === "openrouter"
+          ? (process.env.OPENROUTER_API_KEY ?? "")
+          : candidate.provider === "anthropic"
+            ? (process.env.ANTHROPIC_API_KEY ?? "")
+            : (process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GEMINI_API_KEY ?? "");
     if (key.length > 20 && candidate.test.test(key)) {
       return { model: candidate.make(modelEnv ?? candidate.defaultModel), label: candidate.provider };
     }
@@ -122,7 +173,12 @@ function resolveGeneratorModel(): { model: Parameters<typeof generateText>[0]["m
   return null;
 }
 
-async function generateTextToType(task: string, elementDescription: string, url: string): Promise<{ text: string; via: string }> {
+async function generateTextToType(
+  budget: RunBudget,
+  task: string,
+  elementDescription: string,
+  url: string,
+): Promise<{ text: string; via: string }> {
   const generator = resolveGeneratorModel();
   if (!generator) return { text: heuristicQuery(task), via: "keyword-heuristic" };
   try {
@@ -130,112 +186,104 @@ async function generateTextToType(task: string, elementDescription: string, url:
       model: generator.model,
       prompt: `A browser agent is performing this task: "${task}". It must type into the ${elementDescription} on ${url}. Reply with ONLY the exact text to type (for a search box: a short search query; no quotes, no explanation).`,
       maxOutputTokens: 48,
+      abortSignal: budget.signal,
     });
     const cleaned = text.trim().replace(/^["']|["']$/g, "");
     if (cleaned.length === 0) throw new Error("empty generation");
     return { text: cleaned, via: generator.label };
-  } catch {
+  } catch (error) {
+    if (budget.signal.aborted) throw error; // deadline/cancellation propagates
     // A bad model id or provider outage must not kill the task; degrade and say so.
     return { text: heuristicQuery(task), via: "keyword-heuristic-after-generator-error" };
   }
 }
 
-// ── Jev ───────────────────────────────────────────────────────────────────────
-export interface JevUsage {
-  jev_calls: number;
-  input_tokens: number;
-  output_tokens: number;
-  est_cost_usd: number;
-}
-
-const usage: JevUsage = { jev_calls: 0, input_tokens: 0, output_tokens: 0, est_cost_usd: 0 };
-
-async function askJev(state: unknown, questions: Record<string, unknown>) {
-  const response = await (jev.systemOne as unknown as (p: unknown) => any)({
-    state,
-    questions,
-    model: MODEL,
-  });
-  usage.jev_calls += 1;
-  usage.input_tokens += response.usage?.input_tokens ?? 0;
-  usage.output_tokens += response.usage?.output_tokens ?? 0;
-  usage.est_cost_usd = (usage.input_tokens / 1e6) * PRICE_PER_MTOK_IN;
-  return response.answers;
-}
-
 // ── Extraction: DOM-first (a11y trees under-report inputs) ───────────────────
-async function extractAndStamp(page: Page): Promise<RawElement[]> {
-  return page.evaluate(() => {
-    // Clear stamps from previous steps first: elements that dropped out of the
-    // candidate list keep their old data-jev-id, which would make selectors
-    // match more than one element.
-    document.querySelectorAll("[data-jev-id]").forEach((el) => el.removeAttribute("data-jev-id"));
-    const SEL =
-      'a[href], button, input, textarea, select, [role="button"], [role="link"], [role="searchbox"], [role="textbox"]';
-    const nodes = Array.from(document.querySelectorAll(SEL)).slice(0, 2000);
-    let n = 0;
-    const out: any[] = [];
-    for (const el of nodes as HTMLElement[]) {
-      const rects = el.getClientRects();
-      if (!rects.length) continue;
-      const style = getComputedStyle(el);
-      if (style.display === "none" || style.visibility === "hidden") continue;
-      const tag = el.tagName.toLowerCase();
-      const roleAttr = el.getAttribute("role") || "";
-      const typeAttr = (el.getAttribute("type") || "").toLowerCase();
-      const label = (
-        el.getAttribute("aria-label") ||
-        el.getAttribute("placeholder") ||
-        el.getAttribute("title") ||
-        el.innerText ||
-        el.textContent ||
-        ""
-      )
-        .replace(/\s+/g, " ")
-        .trim();
-      const href = tag === "a" ? el.getAttribute("href") || "" : "";
-      const clickable =
-        ["a", "button"].includes(tag) ||
-        ["button", "link"].includes(roleAttr) ||
-        ["submit", "button", "checkbox", "radio"].includes(typeAttr);
-      const typeable =
-        tag === "textarea" ||
-        (tag === "input" && !["submit", "button", "checkbox", "radio", "file", "hidden", "range", "password"].includes(typeAttr)) ||
-        ["searchbox", "textbox"].includes(roleAttr);
-      const selectable = tag === "select";
-      if (!clickable && !typeable && !selectable) continue;
-      n += 1;
-      const attr = `j${n}`;
-      el.setAttribute("data-jev-id", attr);
-      const options =
-        tag === "select"
-          ? Array.from((el as unknown as HTMLSelectElement).options)
-              .map((o) => (o.label || o.value || "").trim())
-              .filter(Boolean)
-              .slice(0, 200)
-          : undefined;
-      out.push({ attr, tag, role: roleAttr || tag, text: label.slice(0, 80), href: el.getAttribute("href") || (href as string), typeAttr, clickable, typeable, options });
-    }
-    return out;
-  });
+async function extractAndStamp(page: Page, bounded: (cap: number) => number): Promise<RawElement[]> {
+  return page.evaluate(
+    () => {
+      // Clear stamps from previous steps first: elements that dropped out of
+      // the candidate list keep their old data-jev-id, which would make
+      // selectors match more than one element.
+      document.querySelectorAll("[data-jev-id]").forEach((el) => el.removeAttribute("data-jev-id"));
+      const SEL =
+        'a[href], button, input, textarea, select, [role="button"], [role="link"], [role="searchbox"], [role="textbox"]';
+      const out: any[] = [];
+      for (const el of document.querySelectorAll(SEL) as NodeListOf<HTMLElement>) {
+        // Cap accepted candidates AFTER filtering so hidden boilerplate at the
+        // top of the DOM cannot crowd out usable controls below it.
+        if (out.length >= 2000) break;
+        const rects = el.getClientRects();
+        if (!rects.length) continue;
+        const style = getComputedStyle(el);
+        if (style.display === "none" || style.visibility === "hidden") continue;
+        const tag = el.tagName.toLowerCase();
+        const roleAttr = el.getAttribute("role") || "";
+        const typeAttr = (el.getAttribute("type") || "").toLowerCase();
+        const label = (
+          el.getAttribute("aria-label") ||
+          el.getAttribute("placeholder") ||
+          el.getAttribute("title") ||
+          el.innerText ||
+          el.textContent ||
+          ""
+        )
+          .replace(/\s+/g, " ")
+          .trim();
+        const href = tag === "a" ? el.getAttribute("href") || "" : "";
+        const clickable =
+          ["a", "button"].includes(tag) ||
+          ["button", "link"].includes(roleAttr) ||
+          ["submit", "button", "checkbox", "radio"].includes(typeAttr);
+        const typeable =
+          tag === "textarea" ||
+          (tag === "input" && !["submit", "button", "checkbox", "radio", "file", "hidden", "range", "password"].includes(typeAttr)) ||
+          ["searchbox", "textbox"].includes(roleAttr);
+        const selectable = tag === "select";
+        if (!clickable && !typeable && !selectable) continue;
+        const attr = `j${out.length + 1}`;
+        el.setAttribute("data-jev-id", attr);
+        const options =
+          tag === "select"
+            ? Array.from((el as unknown as HTMLSelectElement).options)
+                .map((o) => (o.label || o.value || "").trim())
+                .filter(Boolean)
+                .slice(0, 200)
+            : undefined;
+        out.push({ attr, tag, role: roleAttr || tag, text: label.slice(0, 80), href, typeAttr, clickable, typeable, selectable, options });
+      }
+      return out;
+    });
 }
 
-async function pageObservables(page: Page): Promise<{ url: string; title: string; textLength: number }> {
+interface Observables {
+  url: string;
+  title: string;
+  textLength: number;
+  scrollY: number;
+  excerpt: string;
+}
+
+async function pageObservables(page: Page, bounded: (cap: number) => number): Promise<Observables> {
   const url = page.url();
   const title = await page.title().catch(() => "");
-  const textLength = await page
-    .evaluate(() => document.body?.innerText?.length ?? 0)
-    .catch(() => 0);
-  return { url, title, textLength };
+  const data = await page
+    .evaluate(() => ({
+      length: document.body?.innerText?.length ?? 0,
+      scrollY: window.scrollY,
+      excerpt: (document.body?.innerText ?? "").replace(/\s+/g, " ").slice(0, 1500),
+    }))
+    .catch(() => ({ length: 0, scrollY: 0, excerpt: "" }));
+  return { url, title, textLength: data.length, scrollY: data.scrollY, excerpt: data.excerpt };
 }
 
-async function settle(page: Page) {
-  await page.waitForLoadState("networkidle", { timeout: 3_000 }).catch(() => {});
+async function settle(page: Page, bounded: (cap: number) => number) {
+  await page.waitForLoadState("networkidle", { timeout: bounded(3_000) }).catch(() => {});
   await page.waitForTimeout(400);
 }
 
 // ── The loop ─────────────────────────────────────────────────────────────────
-export async function navigate(options: NavigateOptions) {
+export async function navigate(options: NavigateOptions, externalSignal?: AbortSignal) {
   const {
     task,
     startUrl,
@@ -247,104 +295,141 @@ export async function navigate(options: NavigateOptions) {
   } = options;
   const maxChars = options.maxChars ?? DEFAULT_CAPS[format];
   const started = performance.now();
-  const deadline = started + maxSeconds * 1000;
-  usage.jev_calls = 0;
-  usage.input_tokens = 0;
-  usage.output_tokens = 0;
-  usage.est_cost_usd = 0;
+  const deadlineAt = started + maxSeconds * 1000;
+
+  // One abort source per run: the wall-clock deadline, optionally composed
+  // with caller cancellation (the MCP layer forwards its signal).
+  const controller = new AbortController();
+  const deadlineTimer = setTimeout(() => controller.abort(new Error("deadline-exceeded")), maxSeconds * 1000);
+  const onExternalAbort = () => controller.abort(new Error("cancelled-by-caller"));
+  externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
+  if (externalSignal?.aborted) controller.abort(new Error("cancelled-by-caller"));
+
+  const budget: RunBudget = {
+    usage: { jev_calls: 0, input_tokens: 0, output_tokens: 0, est_cost_usd: 0 },
+    signal: controller.signal,
+    deadlineAt,
+  };
+  const remaining = () => Math.max(0, deadlineAt - performance.now());
+  const bounded = (cap: number) => Math.max(250, Math.min(cap, remaining() || 250));
 
   const steps: StepRecord[] = [];
   const consoleEvents: ConsoleEvent[] = [];
   let consoleDropped = 0;
   const currentStep = { n: 0 };
+  const extractionProblems: string[] = [];
 
-  const browser: Browser = await chromium.launch({ headless: process.env.JEV_BROWSER_HEADED !== "1" });
-  let status: string = "error";
-  let error: string | undefined;
+  let browser: Browser | null = null;
+  let status = "error";
 
-  try {
-    const context = await browser.newContext({ viewport: { width: 1024, height: 640 } });
-    let page = await context.newPage();
+  const recordEvent = (event: Omit<ConsoleEvent, "step">) => {
+    if (consoleEvents.length >= MAX_CONSOLE_EVENTS) {
+      consoleDropped += 1;
+      return;
+    }
+    consoleEvents.push({ ...event, step: currentStep.n });
+  };
 
-    page.on("console", (msg) => {
+  const attachPageObservers = (p: Page) => {
+    p.on("console", (msg) => {
       const type = msg.type();
       if (type !== "error" && type !== "warning") return;
-      record({ step: currentStep.n, type: `console_${type}` as ConsoleEvent["type"], text: msg.text().slice(0, 300) });
+      recordEvent({ type: `console_${type}` as ConsoleEvent["type"], text: msg.text().slice(0, 300), page: p.url().slice(0, 120) });
     });
-    page.on("pageerror", (err) => record({ step: currentStep.n, type: "page_error", text: String(err).slice(0, 300) }));
-    page.on("requestfailed", (req) =>
-      record({ step: currentStep.n, type: "request_failed", text: `${req.method()} ${req.url().slice(0, 200)} ${req.failure()?.errorText ?? ""}`.slice(0, 300) }),
+    p.on("pageerror", (err) => recordEvent({ type: "page_error", text: String(err).slice(0, 300), page: p.url().slice(0, 120) }));
+    p.on("requestfailed", (req) =>
+      recordEvent({
+        type: "request_failed",
+        text: `${req.method()} ${req.url().slice(0, 200)} ${req.failure()?.errorText ?? ""}`.slice(0, 300),
+        page: p.url().slice(0, 120),
+      }),
     );
-    // New-tab adoption: popups and target=_blank become the active page.
+  };
+
+  try {
+    browser = await chromium.launch({ headless: process.env.JEV_BROWSER_HEADED !== "1" });
+    const context = await browser.newContext({ viewport: { width: 1024, height: 640 } });
+    // No Playwright default (30s) may ever outlive the run budget.
+    context.setDefaultTimeout(8_000);
+    let page = await context.newPage();
+    attachPageObservers(page);
     let pendingPage: Page | null = null;
     context.on("page", (p) => {
+      attachPageObservers(p); // adopted tabs keep producing diagnostics
       pendingPage = p;
     });
 
-    function record(event: ConsoleEvent) {
-      if (consoleEvents.length >= MAX_CONSOLE_EVENTS) {
-        consoleDropped += 1;
-        return;
-      }
-      consoleEvents.push(event);
-    }
+    await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: bounded(30_000) });
 
-    await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-
-    let lastAction: string | null = null;
+    let lastExecuted: string | null = null;
     let lastOutcome: string | null = null;
     const history: Array<{ step: number; action: string; outcome: string }> = [];
 
     for (let step = 1; step <= maxSteps; step++) {
       currentStep.n = step;
-      if (performance.now() > deadline) {
+      if (remaining() <= 0) {
         status = "timeout";
         break;
       }
 
-      const raw = await extractAndStamp(page);
+      const raw = await extractAndStamp(page, bounded);
       const { elements, truncated } = buildActionSpace(raw);
-      if (elements.length === 0) {
-        steps.push({ step, action: "none", detail: "no interactive elements found", outcome: "empty action space", confidence: null, goal_done: 0, stuck: 1 });
+      const observables = await pageObservables(page, bounded);
+
+      // Empty action space is still judged normally: controls-only criteria
+      // (scroll/back/done) plus the page excerpt. goal_done can and should
+      // fire on terminal pages with no interactive elements.
+      const state = {
+        task,
+        current_page: { url: observables.url, title: observables.title },
+        page_text_excerpt: observables.excerpt,
+        interactive_elements: elements.map((e) => ({ id: e.id, description: e.description })),
+        element_list_truncated: truncated,
+        no_interactive_elements: elements.length === 0,
+        history,
+      };
+      const answers = await askJev(budget, state, stepQuestions(buildCriteria(elements)));
+      const actionAnswer = answers.action;
+      const proposed: string = actionAnswer.choice;
+      const probabilities: Record<string, number> = actionAnswer.probabilities ?? {};
+      const base = {
+        step,
+        proposed_action: proposed,
+        confidence: actionAnswer.confidence ?? null,
+        top_probability: probabilities[proposed] ?? null,
+        goal_done: answers.goal_done.noul,
+        stuck: answers.stuck.noul,
+      };
+
+      // Stop gates run BEFORE execution: a watcher that fires on the current
+      // state must not be overridden by acting on that state.
+      if (proposed === "done") {
+        steps.push({ ...base, executed_action: null, detail: "done proposed; not executed", outcome: "agent declared done before acting" });
+        status = "done";
+        break;
+      }
+      if (answers.goal_done.noul > 0.85) {
+        steps.push({ ...base, executed_action: null, detail: "goal watcher fired; proposed action not executed", outcome: "goal watcher fired before acting" });
+        status = "goal_achieved";
+        break;
+      }
+      if (answers.stuck.noul > 0.85 && step > 2) {
+        steps.push({ ...base, executed_action: null, detail: "stuck watcher fired; proposed action not executed", outcome: "stuck watcher fired before acting" });
         status = "stuck";
         break;
       }
 
-      const observables = await pageObservables(page);
-      const state = {
-        task,
-        current_page: { url: observables.url, title: observables.title },
-        interactive_elements: elements.map((e) => ({ id: e.id, description: e.description })),
-        element_list_truncated: truncated,
-        history,
-      };
-      const answers = await askJev(state, stepQuestions(buildCriteria(elements)));
-      const actionAnswer = answers.action;
-      let chosen: string = actionAnswer.choice;
-
-      // Repeat-no-op recovery: switch to the next-best option from the distribution.
-      // Deliberately no low-confidence override: split distributions between similar
-      // options are legitimate (several acceptable alternatives).
-      if (lastAction === chosen && lastOutcome === "no visible change") {
-        const alternate = pickAlternate(actionAnswer.probabilities, new Set([chosen]));
+      // Repeat-no-op recovery: switch to the next-best option from the
+      // distribution. No low-confidence override by design: split probability
+      // across similar elements is usually several acceptable alternatives.
+      let chosen = proposed;
+      let recoveryReason: string | undefined;
+      if (lastExecuted === proposed && lastOutcome === "no visible change") {
+        const alternate = pickAlternate(probabilities, new Set([proposed]));
         if (alternate) {
-          steps.push({
-            step,
-            action: `${chosen} -> ${alternate}`,
-            detail: `repeat no-op; gate switched to next-best action`,
-            outcome: "recovery",
-            confidence: actionAnswer.confidence ?? null,
-            goal_done: answers.goal_done.noul,
-            stuck: answers.stuck.noul,
-          });
           chosen = alternate;
+          recoveryReason = "repeated action had no effect; switched to next-best option";
         }
-      }
-
-      if (chosen === "done") {
-        status = "done";
-        steps.push({ step, action: "done", detail: "agent declared done", outcome: "stopped", confidence: actionAnswer.confidence ?? null, goal_done: answers.goal_done.noul, stuck: answers.stuck.noul });
-        break;
       }
 
       const element = elements.find(
@@ -352,30 +437,35 @@ export async function navigate(options: NavigateOptions) {
       );
 
       let detail = chosen;
+      let actionError: string | undefined;
       try {
         if (chosen === "back") {
-          await page.goBack({ waitUntil: "domcontentloaded", timeout: 10_000 }).catch(() => {});
-          detail = "went back";
+          const wentBack = await page.goBack({ waitUntil: "domcontentloaded", timeout: bounded(10_000) }).catch(() => null);
+          detail = wentBack ? "went back" : "no history to go back to";
         } else if (chosen === "scroll_down" || chosen === "scroll_up") {
-          await page.evaluate((dir) => window.scrollBy(0, dir * window.innerHeight * 0.8), chosen === "scroll_down" ? 1 : -1);
+          await page.evaluate(
+            (dir) => window.scrollBy(0, dir * window.innerHeight * 0.8),
+            chosen === "scroll_down" ? 1 : -1,
+          );
           detail = chosen;
         } else if (!element) {
-          detail = `unknown action ${chosen}`;
+          actionError = `unknown action ${chosen}`;
         } else if (chosen.startsWith("type_")) {
           if (!allowTyping) {
-            detail = "typing disabled by caller";
+            actionError = "typing disabled by caller";
           } else {
-            const generated = await generateTextToType(task, element.description, page.url());
-            await page.fill(selectorFor(element), generated.text, { timeout: 8_000 });
-            await page.press(selectorFor(element), "Enter", { timeout: 8_000 });
+            const generated = await generateTextToType(budget, task, element.description, page.url());
+            await page.fill(selectorFor(element), generated.text, { timeout: bounded(8_000) });
+            await page.press(selectorFor(element), "Enter", { timeout: bounded(8_000) });
             detail = `typed "${generated.text}" via ${generated.via}`;
           }
         } else if (chosen.startsWith("select_")) {
           const opts = element.options ?? [];
           if (opts.length === 0) {
-            detail = "select had no options";
+            actionError = "select had no options";
           } else {
             const optionAnswer = await askJev(
+              budget,
               { task, page: { url: observables.url, title: observables.title }, dropdown: element.description, options: opts },
               { option: selectOptionQuestion(element.description, opts) },
             );
@@ -385,93 +475,102 @@ export async function navigate(options: NavigateOptions) {
             detail = `selected "${label}"`;
           }
         } else {
-          await page.click(selectorFor(element), { timeout: 8_000 });
+          await page.click(selectorFor(element), { timeout: bounded(8_000) });
           detail = element.description;
         }
-      } catch (actionError) {
-        detail = `action failed: ${(actionError as Error).message.slice(0, 120)}`;
+      } catch (error) {
+        if (controller.signal.aborted) throw error; // deadline/cancellation propagates
+        actionError = (error as Error).message.slice(0, 160);
       }
 
-      await settle(page);
+      await settle(page, bounded);
       if (pendingPage) {
         page = pendingPage;
         pendingPage = null;
-        await settle(page);
+        await settle(page, bounded);
         detail += " (followed new tab)";
       }
 
-      const after = await pageObservables(page);
-      const outcome =
-        after.url !== observables.url
+      const after = await pageObservables(page, bounded);
+      // Execution failures are attributed to the action, not to ambient page
+      // changes that happened to occur in the same window.
+      const outcome = actionError
+        ? "action failed"
+        : after.url !== observables.url
           ? `navigated to ${after.url}`
           : after.title !== observables.title
             ? `page changed: "${after.title}"`
             : Math.abs(after.textLength - observables.textLength) > 50
               ? "page content changed"
-              : "no visible change";
+              : Math.abs(after.scrollY - observables.scrollY) > 40
+                ? "scrolled"
+                : "no visible change";
 
-      lastAction = chosen;
+      lastExecuted = chosen;
       lastOutcome = outcome;
       history.push({ step, action: chosen, outcome });
       steps.push({
-        step,
-        action: chosen,
+        ...base,
+        executed_action: chosen,
         detail,
+        recovery_reason: recoveryReason,
+        action_error: actionError,
         outcome,
-        confidence: actionAnswer.confidence ?? null,
-        goal_done: answers.goal_done.noul,
-        stuck: answers.stuck.noul,
       });
 
-      if (answers.goal_done.noul > 0.85) {
-        status = "goal_achieved";
-        break;
-      }
-      if (answers.stuck.noul > 0.85 && step > 2) {
-        status = "stuck";
-        break;
-      }
       if (step === maxSteps) status = "max_steps";
     }
 
-    const finalObservables = await pageObservables(page);
-    const payload = await extractPayload(page, format, maxChars);
+    const finalObservables = await pageObservables(page, bounded);
+    let payload: { truncated: boolean; true_length: number; content: string } | null = null;
     let screenshotBase64: string | null = null;
+    try {
+      payload = await extractPayload(page, format, maxChars, bounded);
+    } catch (error) {
+      extractionProblems.push(`page payload: ${(error as Error).message.slice(0, 160)}`);
+    }
     if (screenshot === "final") {
-      const buffer = await page.screenshot({ type: "jpeg", quality: 70 });
-      screenshotBase64 = buffer.toString("base64");
+      try {
+        const buffer = await page.screenshot({ type: "jpeg", quality: 70, timeout: bounded(10_000) });
+        screenshotBase64 = buffer.toString("base64");
+      } catch (error) {
+        extractionProblems.push(`screenshot: ${(error as Error).message.slice(0, 160)}`);
+      }
     }
 
     return {
       status,
-      error,
       final_url: finalObservables.url,
       final_title: finalObservables.title,
       format,
       max_chars: maxChars,
       page: payload,
+      extraction_problems: extractionProblems.length ? extractionProblems : undefined,
       steps,
       console_events: consoleEvents,
       console_events_dropped: consoleDropped,
-      usage: { ...usage },
+      usage: { ...budget.usage },
       elapsed_ms: Math.round(performance.now() - started),
       model: MODEL,
       screenshot_base64_jpeg: screenshotBase64,
     };
   } catch (runError) {
-    error = (runError as Error).message;
+    const aborted = controller.signal.aborted;
+    status = aborted && String((runError as Error).message).includes("deadline") ? "timeout" : "error";
     return {
-      status: "error",
-      error,
+      status,
+      error: aborted ? `aborted: ${(runError as Error).message}` : (runError as Error).message,
       steps,
       console_events: consoleEvents,
       console_events_dropped: consoleDropped,
-      usage: { ...usage },
+      usage: { ...budget.usage },
       elapsed_ms: Math.round(performance.now() - started),
       model: MODEL,
     };
   } finally {
-    await browser.close().catch(() => {});
+    clearTimeout(deadlineTimer);
+    externalSignal?.removeEventListener("abort", onExternalAbort);
+    await browser?.close().catch(() => {});
   }
 }
 
@@ -479,12 +578,20 @@ async function extractPayload(
   page: Page,
   format: string,
   maxChars: number,
+  bounded: (cap: number) => number,
 ): Promise<{ truncated: boolean; true_length: number; content: string }> {
   let content = "";
   if (format === "html") {
-    content = await page.evaluate(() => document.documentElement.outerHTML);
+    // Strip the extraction stamps so returned HTML matches the page the user
+    // would see, not the instrumented one.
+    content = await page.evaluate(
+      () => {
+        const clone = document.documentElement.cloneNode(true) as HTMLElement;
+        clone.querySelectorAll("[data-jev-id]").forEach((el) => el.removeAttribute("data-jev-id"));
+        return clone.outerHTML;
+      });
   } else if (format === "aria") {
-    content = await page.locator("body").ariaSnapshot();
+    content = await page.locator("body").ariaSnapshot({ timeout: bounded(10_000) });
   } else if (format === "markdown") {
     const html = await page.evaluate(() => document.body?.innerHTML ?? "");
     content = turndown.turndown(html);

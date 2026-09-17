@@ -21,7 +21,11 @@ server.registerTool(
       "errors captured along the way, token usage with estimated cost, and a final screenshot.",
     inputSchema: {
       task: z.string().min(1).describe("What the agent should accomplish, in natural language."),
-      start_url: z.string().url().describe("Where to start."),
+      start_url: z
+        .string()
+        .url()
+        .refine((v) => /^https?:\/\//.test(v), "start_url must be an http(s) URL")
+        .describe("Where to start."),
       max_steps: z.number().int().min(1).max(100).optional().describe("Hard step cap. Default 24."),
       max_seconds: z.number().min(10).max(600).optional().describe("Wall-clock cap in seconds. Default 180."),
       allow_typing: z
@@ -39,17 +43,20 @@ server.registerTool(
       screenshot: z.enum(["final", "none"]).optional().describe("Final viewport JPEG. Default 'final'."),
     },
   },
-  async ({ task, start_url, ...rest }) => {
-    const result = await navigate({
-      task,
-      startUrl: start_url,
-      maxSteps: rest.max_steps,
-      maxSeconds: rest.max_seconds,
-      allowTyping: rest.allow_typing,
-      format: rest.format,
-      maxChars: rest.max_chars,
-      screenshot: rest.screenshot,
-    });
+  async ({ task, start_url, ...rest }, extra) => {
+    const result = await navigate(
+      {
+        task,
+        startUrl: start_url,
+        maxSteps: rest.max_steps,
+        maxSeconds: rest.max_seconds,
+        allowTyping: rest.allow_typing,
+        format: rest.format,
+        maxChars: rest.max_chars,
+        screenshot: rest.screenshot,
+      },
+      extra.signal,
+    );
 
     const { screenshot_base64_jpeg, ...json } = result as Record<string, unknown>;
     const content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [

@@ -4,7 +4,9 @@
 import { choice, noul } from "@typesafe-ai/sdk";
 
 /**
- * One Jev call per step: three independent judgments over the same state.
+ * The primary Jev call for each step: three independent judgments over the
+ * same state. A select action adds one second-stage call for its option (see
+ * selectOptionQuestion), so "one call per step" means one primary call.
  * Patterns: fan-out (docs.typesafe.ai/patterns/fan-out.md) — the questions
  * cannot see each other's answers, which is what makes goal_done an honest
  * cross-check on the action Choice rather than a rationalization of it.
