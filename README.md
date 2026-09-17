@@ -7,11 +7,31 @@ Give jev-browser a task and a URL.
 
 It drives a real headless browser through an MCP server, CLI, or library. TypeSafe's Jev model picks one action per step from the page's clickable, typeable, and selectable elements, and scores how likely it is that the goal is met or the run is stuck. Code owns the loop: budgets, recovery, stop gates. You get the final page, a step trace with confidences, console errors, and a screenshot.
 
-A Wikipedia navigation finishes in 3 to 5 seconds for about $0.0016. It has filled a contact form without submitting it, pulled a price off a live pricing page, and returned a guide as markdown. This is early software. Expect rough edges on harder sites.
+Things it has done on real sites, not demos:
+
+- Navigated Wikipedia from the Coffee article to Espresso in about 4 seconds, for $0.0016.
+- Filled a contact form and stopped without submitting it.
+- Pulled the price off a live pricing page.
+- Returned a full guide page as markdown.
+- Produced an accessibility-tree breakdown of a WordPress site.
+
+This is early software. Expect rough edges on harder sites. Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Install
 
 Requires Node.js 20 or newer, a TypeSafe API key from [console.typesafe.ai/settings/keys](https://console.typesafe.ai/settings/keys), and optionally a key for a typing provider (see [the typing model](#the-typing-model)). Playwright's Chromium downloads automatically on install; set `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD=1` to opt out.
+
+### Let an agent install it for you
+
+Paste this into your coding agent:
+
+```text
+Install jev-browser as an MCP server for me. Run `amp mcp add jev-browser -- npx -y @jkudish/jev-browser`
+(or the Claude Code / Codex / OpenCode equivalent from the README). I will put a TypeSafe API key from
+console.typesafe.ai/settings/keys into the server environment as TYPESAFE_API_KEY. When it's registered,
+verify with one navigation task on a public site and show me the step trace and cost.
+Full instructions: https://github.com/jkudish/jev-browser#readme
+```
 
 From npm:
 
@@ -74,18 +94,6 @@ args = ["-y", "@jkudish/jev-browser"]
 ```
 
 Some MCP clients filter the environment before spawning servers, which silently drops `TYPESAFE_API_KEY`. If the server reports a missing key, pass it explicitly as shown above.
-
-### Let an agent install it for you
-
-Paste this into your coding agent:
-
-```text
-Install jev-browser as an MCP server for me. Run `amp mcp add jev-browser -- npx -y @jkudish/jev-browser`
-(or the Claude Code / Codex / OpenCode equivalent from the README). I will put a TypeSafe API key from
-console.typesafe.ai/settings/keys into the server environment as TYPESAFE_API_KEY. When it's registered,
-verify with one navigation task on a public site and show me the step trace and cost.
-Full instructions: https://github.com/jkudish/jev-browser#readme
-```
 
 ## The tool
 

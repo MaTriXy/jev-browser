@@ -1,13 +1,8 @@
 # Changelog
 
-## Unreleased
-
-- Published to npm as `@jkudish/jev-browser` (the unscoped `jev-browser` name belongs to another project).
-- Documentation: typing-model guide, result and trace walkthrough, SECURITY.md, agent-install prompt.
-
 ## 0.1.0
 
-Initial release.
+Initial release, published to npm as `@jkudish/jev-browser` (the unscoped `jev-browser` name belongs to another project).
 
 - `jev_navigate` MCP tool: task plus start URL in, final page plus step trace, captured console and network errors, usage and estimated cost, and a final screenshot out.
 - One primary Jev call per step: an action Choice over up to 240 page elements plus scroll, back, and done; a goal judgment; a stuck judgment. A select action adds one second-stage Choice for its option.
