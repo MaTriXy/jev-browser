@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Email **joachim.kudish@gmail.com** with "jev-browser security" in the subject. Include:
+Email **joey@jkudish.com** with "jev-browser security" in the subject. Include:
 
 - the package version and how you installed it;
 - a minimal reproduction (task, start URL, environment);
