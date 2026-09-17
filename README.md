@@ -29,10 +29,10 @@ Paste this into your coding agent:
 
 ```text
 Install the Jev Browser MCP server for me. The package is @jkudish/jev-browser on npm and the server
-command is `npx -y @jkudish/jev-browser`; register it with whatever MCP client you have (Amp, Claude Code,
-Codex, OpenCode, Cursor, or another). I will put a TypeSafe API key from console.typesafe.ai/settings/keys
-into the server environment as TYPESAFE_API_KEY. When it's registered, verify with one navigation task on
-a public site and show me the step trace and cost.
+command is `npx -y @jkudish/jev-browser`; register it as an MCP server with your client. Check whether
+TYPESAFE_API_KEY is already set in the server environment; if not, walk me through setting it up without
+pasting the key into the chat (I can create one at console.typesafe.ai/settings/keys). When it's
+registered, ask if I'd like to run a first navigation task, and when we do, show me the step trace and cost.
 Full instructions: https://github.com/jkudish/jev-browser#readme
 ```
 
