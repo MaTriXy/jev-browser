@@ -1,12 +1,20 @@
 #!/usr/bin/env node
-// jev-browser: a Jev-driven browser agent as an MCP tool.
-// Give it a task and a start URL; it navigates a real browser with typed
-// Choice actions, a provider-agnostic typing cascade, and stop/stuck gates.
+// jev-browser: a Jev-driven browser agent.
+//   jev-browser run "<task>" <url> [options]   CLI
+//   jev-browser                                 MCP stdio server
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { navigate } from "./navigate.js";
+import { runCli } from "./cli.js";
+
+if (process.argv[2] === "run") {
+  process.exit(await runCli(process.argv.slice(3)));
+}
+if (process.argv[2] === "--help" || process.argv[2] === "-h") {
+  process.exit(await runCli(["--help"]));
+}
 
 const server = new McpServer({ name: "jev-browser", version: "0.1.0" });
 
