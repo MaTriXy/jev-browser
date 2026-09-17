@@ -94,7 +94,7 @@ Some MCP clients filter the environment before spawning servers, which silently 
 
 ## The tool
 
-Every run makes paid TypeSafe API calls, typically a fraction of a cent, plus one small paid call per typed field when a typing provider is configured. The example below is a real run.
+Every run makes paid TypeSafe API calls, typically a fraction of a cent, plus one small LLM call per typed field when a typing provider is configured. The example below is a real run.
 
 ```jsonc
 // arguments
