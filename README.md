@@ -190,6 +190,10 @@ With no provider at all, typing falls back to a keyword heuristic built from the
 | `JEV_BROWSER_HEADED` | unset | Set to `1` to watch the browser. |
 | `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD` | unset | Set to `1` to skip the Chromium postinstall. |
 
+## Also in the family
+
+Need the judgments without the browser? [Jev MCP](https://github.com/jkudish/jev-mcp) exposes the same model as three tools your agent can call anywhere: verify claims against evidence, screen content before it enters context, and rank candidates by meaning. The npm package is [@jkudish/jev-mcp](https://www.npmjs.com/package/@jkudish/jev-mcp).
+
 ## Development
 
 ```bash
