@@ -1,7 +1,7 @@
-// Jev transport: TypeSafe direct (default) or OpenRouter's Decisions API.
-// Same {state, questions} / answers contract on both; only URL, auth, and
-// model slug differ. OpenRouter is an alpha endpoint and adds a hop, so
-// direct TypeSafe remains the recommended default.
+// Jev transport: TypeSafe direct (default), OpenRouter Decisions, or
+// Cloudflare Workers AI. All speak the {state, questions} / answers contract;
+// URL, auth, and model slugs differ. Proxies add hops, so direct TypeSafe
+// remains the recommended default.
 
 import { TypeSafeClient } from "@typesafe-ai/sdk";
 
@@ -23,6 +23,9 @@ function resolve(env: NodeJS.ProcessEnv): JevProvider {
   const explicit = (env.JEV_PROVIDER ?? "auto").toLowerCase();
   const hasTypesafe = Boolean(env.TYPESAFE_API_KEY);
   const hasOpenRouter = /^sk-or-/.test(env.OPENROUTER_API_KEY ?? "");
+  const cfToken = env.JEV_CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_API_TOKEN;
+  const hasCloudflare = Boolean(cfToken && env.CLOUDFLARE_ACCOUNT_ID);
+
   if (explicit === "typesafe") {
     if (!hasTypesafe) throw new Error("JEV_PROVIDER=typesafe but TYPESAFE_API_KEY is not set.");
     return "typesafe";
@@ -31,15 +34,16 @@ function resolve(env: NodeJS.ProcessEnv): JevProvider {
     if (!hasOpenRouter) throw new Error("JEV_PROVIDER=openrouter but OPENROUTER_API_KEY is not set or not an sk-or- key.");
     return "openrouter";
   }
-  const hasCloudflare = Boolean(env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ACCOUNT_ID);
   if (explicit === "cloudflare") {
-    if (!hasCloudflare) throw new Error("JEV_PROVIDER=cloudflare but CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are not both set.");
+    if (!hasCloudflare) throw new Error("JEV_PROVIDER=cloudflare but a Cloudflare API token (CLOUDFLARE_API_TOKEN or JEV_CLOUDFLARE_API_TOKEN) and CLOUDFLARE_ACCOUNT_ID are not both set.");
     return "cloudflare";
   }
   if (hasTypesafe) return "typesafe";
   if (hasOpenRouter) return "openrouter";
   if (hasCloudflare) return "cloudflare";
-  throw new Error("No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), or CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID found. Set one, or JEV_PROVIDER to choose explicitly.");
+  throw new Error(
+    "No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), or Cloudflare token + CLOUDFLARE_ACCOUNT_ID found. Set one, or JEV_PROVIDER to choose explicitly.",
+  );
 }
 
 export async function askJev(
@@ -68,35 +72,37 @@ export async function askJev(
     };
   }
 
-  // OpenRouter has no redirecting "latest" slug; map it to the current release.
-  // Pin exact versions with the model env var when that matters.
-  const OPENROUTER_LATEST = "jev-1.13";
-  const effective = model === "jev-latest" ? OPENROUTER_LATEST : model;
-  const slug = effective.startsWith("typesafe/") ? effective : `typesafe/${effective}`;
-  const response = await fetch("https://openrouter.ai/api/alpha/decisions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": REFERER,
-      "X-Title": X_TITLE,
-      "X-OpenRouter-Title": X_TITLE,
-    },
-    body: JSON.stringify({ model: slug, state, questions }),
-    signal,
-  });
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`OpenRouter decisions API ${response.status}: ${body.slice(0, 200)}`);
+  if (provider === "openrouter") {
+    // OpenRouter has no redirecting "latest" slug; map it to the current
+    // release. Pin exact versions with the model env var when that matters.
+    const OPENROUTER_LATEST = "jev-1.13";
+    const effective = model === "jev-latest" ? OPENROUTER_LATEST : model;
+    const slug = effective.startsWith("typesafe/") ? effective : `typesafe/${effective}`;
+    const response = await fetch("https://openrouter.ai/api/alpha/decisions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": REFERER,
+        "X-Title": X_TITLE,
+        "X-OpenRouter-Title": X_TITLE,
+      },
+      body: JSON.stringify({ model: slug, state, questions }),
+      signal,
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`OpenRouter decisions API ${response.status}: ${body.slice(0, 200)}`);
+    }
+    const body = await response.json();
+    return {
+      answers: body.answers ?? {},
+      // The decisions endpoint does not document a usage block; tolerate absence.
+      usage: { input_tokens: body.usage?.input_tokens ?? 0, output_tokens: body.usage?.output_tokens ?? 0 },
+      provider,
+      model: slug,
+    };
   }
-  const body = await response.json();
-  return {
-    answers: body.answers ?? {},
-    // The decisions endpoint does not document a usage block; tolerate absence.
-    usage: { input_tokens: body.usage?.input_tokens ?? 0, output_tokens: body.usage?.output_tokens ?? 0 },
-    provider,
-    model: slug,
-  };
 
   // Cloudflare Workers AI wraps the same contract in {model, input} and the
   // v4 {result, success} envelope. Single alias; no version pinning.
@@ -106,7 +112,7 @@ export async function askJev(
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`,
+        Authorization: `Bearer ${process.env.JEV_CLOUDFLARE_API_TOKEN || process.env.CLOUDFLARE_API_TOKEN}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ model: cfSlug, input: { state, questions } }),
