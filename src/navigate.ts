@@ -273,7 +273,7 @@ async function pageObservables(page: Page, bounded: (cap: number) => number): Pr
 }
 
 async function settle(page: Page, bounded: (cap: number) => number) {
-  await page.waitForLoadState("domcontentloaded", { timeout: bounded(8_000) }).catch(() => {});
+  await page.waitForLoadState("domcontentloaded", { timeout: bounded(4_000) }).catch(() => {});
   // DOM-stability settle: two consecutive identical fingerprints mean the page
   // has stopped re-rendering, which is the signal we actually want; quiet
   // network was only ever a proxy for it, and analytics pings keep heavy sites
@@ -472,8 +472,8 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
             actionError = "typing disabled by caller";
           } else {
             const generated = await generateTextToType(budget, task, element.description, page.url());
-            await page.fill(selectorFor(element), generated.text, { timeout: bounded(8_000) });
-            await page.press(selectorFor(element), "Enter", { timeout: bounded(8_000) });
+            await page.fill(selectorFor(element), generated.text, { timeout: bounded(4_000) });
+            await page.press(selectorFor(element), "Enter", { timeout: bounded(4_000) });
             detail = `typed "${generated.text}" via ${generated.via}`;
           }
         } else if (chosen.startsWith("select_")) {
@@ -492,7 +492,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
             detail = `selected "${label}"`;
           }
         } else {
-          await page.click(selectorFor(element), { timeout: bounded(8_000) });
+          await page.click(selectorFor(element), { timeout: bounded(4_000) });
           detail = element.description;
         }
       } catch (error) {
