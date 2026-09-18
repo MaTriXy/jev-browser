@@ -3,9 +3,10 @@
 // URL, auth, and model slugs differ. Proxies add hops, so direct TypeSafe
 // remains the recommended default.
 
+import { experimental_evaluate } from "ai";
 import { TypeSafeClient } from "@typesafe-ai/sdk";
 
-export type JevProvider = "typesafe" | "openrouter" | "cloudflare";
+export type JevProvider = "typesafe" | "openrouter" | "cloudflare" | "vercel";
 
 export interface AskResult {
   answers: Record<string, any>;
@@ -34,6 +35,10 @@ function resolve(env: NodeJS.ProcessEnv): JevProvider {
     if (!hasOpenRouter) throw new Error("JEV_PROVIDER=openrouter but OPENROUTER_API_KEY is not set or not an sk-or- key.");
     return "openrouter";
   }
+  if (explicit === "vercel") {
+    if (!env.AI_GATEWAY_API_KEY) throw new Error("JEV_PROVIDER=vercel but AI_GATEWAY_API_KEY is not set.");
+    return "vercel";
+  }
   if (explicit === "cloudflare") {
     if (!hasCloudflare) throw new Error("JEV_PROVIDER=cloudflare but a Cloudflare API token (CLOUDFLARE_API_TOKEN or JEV_CLOUDFLARE_API_TOKEN) and CLOUDFLARE_ACCOUNT_ID are not both set.");
     return "cloudflare";
@@ -41,6 +46,7 @@ function resolve(env: NodeJS.ProcessEnv): JevProvider {
   if (hasTypesafe) return "typesafe";
   if (hasOpenRouter) return "openrouter";
   if (hasCloudflare) return "cloudflare";
+  if (env.AI_GATEWAY_API_KEY) return "vercel";
   throw new Error(
     "No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), or Cloudflare token + CLOUDFLARE_ACCOUNT_ID found. Set one, or JEV_PROVIDER to choose explicitly.",
   );
@@ -104,6 +110,46 @@ export async function askJev(
     };
   }
 
+  if (provider === "vercel") {
+  // Vercel AI Gateway exposes Jev through the AI SDK's experimental evaluate
+  // API: "noul" questions become "boolean", answers return as probabilities,
+  // and Choice/Score confidence lives in providerMetadata.typesafe.
+  const vercelQuestions: Record<string, any> = {};
+  for (const [id, question] of Object.entries(questions)) {
+    const q = question as { type: string; instructions?: unknown; criteria?: unknown };
+    vercelQuestions[id] = {
+      type: q.type === "noul" ? "boolean" : q.type,
+      instructions: q.instructions,
+      criteria: q.criteria,
+    };
+  }
+  const result = await experimental_evaluate({
+    model: model.startsWith("typesafe-ai/") ? model : "typesafe-ai/jev",
+    state: state as any,
+    questions: vercelQuestions as any,
+    abortSignal: signal,
+  });
+  const confidence = ((result as any).providerMetadata?.typesafe?.confidence ?? {}) as Record<string, number>;
+  const adapted: Record<string, any> = {};
+  for (const [id, answer] of Object.entries(result.answers as Record<string, any>)) {
+    if (answer?.type === "boolean") {
+      adapted[id] = { type: "noul", noul: answer.probability };
+    } else if (answer?.type === "choice") {
+      adapted[id] = { type: "choice", choice: answer.choice, probabilities: answer.probabilities ?? {}, confidence: confidence[id] ?? null };
+    } else if (answer?.type === "score") {
+      adapted[id] = { type: "score", score: answer.score, probabilities: answer.probabilities ?? {}, confidence: confidence[id] ?? null };
+    } else {
+      adapted[id] = answer;
+    }
+  }
+  return {
+    answers: adapted,
+    usage: { input_tokens: result.usage?.inputTokens ?? 0, output_tokens: result.usage?.outputTokens ?? 0 },
+    provider,
+    model: "typesafe-ai/jev",
+  };
+}
+
   // Cloudflare Workers AI wraps the same contract in {model, input} and the
   // v4 {result, success} envelope. Single alias; no version pinning.
   const cfSlug = model.startsWith("typesafe/") ? model : `typesafe/${model === "jev-latest" ? "jev" : model}`;
@@ -123,7 +169,12 @@ export async function askJev(
   if (!cfResponse.ok || cfBody.success === false) {
     throw new Error(`Cloudflare AI run ${cfResponse.status}: ${JSON.stringify(cfBody.errors ?? cfBody).slice(0, 200)}`);
   }
-  const cfPayload = cfBody.result ?? cfBody;
+  // The v4 envelope double-nests: body.result.result holds the model output.
+  const cfOuter = cfBody.result;
+  if (cfOuter && typeof cfOuter.state === "string" && cfOuter.state !== "Completed") {
+    throw new Error(`Cloudflare AI run state ${cfOuter.state}: ${JSON.stringify(cfBody.errors ?? []).slice(0, 200)}`);
+  }
+  const cfPayload = cfOuter?.result ?? cfOuter ?? cfBody;
   return {
     answers: cfPayload.answers ?? {},
     usage: { input_tokens: cfPayload.usage?.input_tokens ?? 0, output_tokens: cfPayload.usage?.output_tokens ?? 0 },

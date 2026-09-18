@@ -2,7 +2,10 @@
 
 ## 0.3.0
 
-- Cloudflare Workers AI support: with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set, judgments run through Cloudflare at the `typesafe/jev` alias; `JEV_PROVIDER=cloudflare` forces it. Usage tokens are reported on every call. Provider resolution order: TypeSafe direct, OpenRouter, Cloudflare.
+- Cloudflare Workers AI support: with `CLOUDFLARE_API_TOKEN` (or `JEV_CLOUDFLARE_API_TOKEN`) and `CLOUDFLARE_ACCOUNT_ID` set, judgments run through Cloudflare at the `typesafe/jev` alias; `JEV_PROVIDER=cloudflare` forces it. Usage tokens are reported on every call.
+- Vercel AI Gateway support: with `AI_GATEWAY_API_KEY` set, judgments run through the AI SDK evaluate API at `typesafe-ai/jev`; `JEV_PROVIDER=vercel` forces it. Noul, choice, and score answers are adapted back to this package's shapes, with TypeSafe confidence included.
+- Provider resolution order: TypeSafe direct, OpenRouter, Cloudflare, Vercel.
+- Internal fix: transport branches are explicitly guarded per provider.
 
 ## 0.2.0
 
