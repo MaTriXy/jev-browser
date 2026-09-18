@@ -19,6 +19,12 @@ Things it has done on real sites, not demos:
 
 This is early software. Expect rough edges on harder sites. Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Demo
+
+Searches GitHub for this repository, opens Releases, and answers a question about the page. Every Jev judgment is on the right: the action chosen, its confidence, and the goal and stuck probabilities for each step.
+
+<video src="assets/github-demo.mp4" controls muted loop></video>
+
 ## Install
 
 Requires Node.js 20 or newer, a TypeSafe API key from [console.typesafe.ai/settings/keys](https://console.typesafe.ai/settings/keys), and optionally a key for a typing provider (see [the typing model](#the-typing-model)). Playwright's Chromium downloads automatically on install; set `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD=1` to opt out.
