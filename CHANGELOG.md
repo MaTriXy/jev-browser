@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 - Recording support: `--record <path.webm|dir>` on the CLI and `recordDir` on `navigate()` capture a video of the page; results include `video_path` and per-step `t_ms` timestamps.
 - OpenRouter typing default moved to `google/gemini-2.5-flash-lite`: `openai/gpt-5.6-luna` returns empty output through OpenRouter for short prompts (5/5 in testing), and the Gemini default is faster and cheaper than the alternatives measured.
