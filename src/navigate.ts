@@ -9,7 +9,6 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { TypeSafeClient } from "@typesafe-ai/sdk";
 import TurndownService from "turndown";
 import * as gfm from "turndown-plugin-gfm";
 import {
@@ -76,13 +75,7 @@ const DEFAULT_CAPS: Record<string, number> = {
 const turndown = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced" });
 turndown.use(gfm.gfm);
 
-// Lazy so a missing API key produces a structured error from a call, not a
-// server that never starts.
-let jevClient: TypeSafeClient | null = null;
-function jev(): TypeSafeClient {
-  jevClient ??= new TypeSafeClient();
-  return jevClient;
-}
+import { askJev as askProvider, type JevProvider } from "./provider.js";
 
 interface RunBudget {
   usage: JevUsage;
@@ -90,18 +83,18 @@ interface RunBudget {
   deadlineAt: number; // performance.now() milliseconds
 }
 
+let lastProvider: JevProvider | null = null;
+let lastModel: string | null = null;
+
 async function askJev(budget: RunBudget, state: unknown, questions: Record<string, unknown>) {
-  const response = await (
-    jev().systemOne as unknown as (
-      payload: { state: unknown; questions: Record<string, unknown>; model?: string },
-      options?: { signal?: AbortSignal },
-    ) => Promise<any>
-  )({ state, questions, model: MODEL }, { signal: budget.signal });
+  const result = await askProvider(state, questions, MODEL, budget.signal);
+  lastProvider = result.provider;
+  lastModel = result.model;
   budget.usage.jev_calls += 1;
-  budget.usage.input_tokens += response.usage?.input_tokens ?? 0;
-  budget.usage.output_tokens += response.usage?.output_tokens ?? 0;
+  budget.usage.input_tokens += result.usage.input_tokens;
+  budget.usage.output_tokens += result.usage.output_tokens;
   budget.usage.est_cost_usd = (budget.usage.input_tokens / 1e6) * PRICE_PER_MTOK_IN;
-  return response.answers;
+  return result.answers;
 }
 
 // ── Typing generator: provider-agnostic via the Vercel AI SDK ────────────────
@@ -551,7 +544,8 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       console_events_dropped: consoleDropped,
       usage: { ...budget.usage },
       elapsed_ms: Math.round(performance.now() - started),
-      model: MODEL,
+      model: lastModel ?? MODEL,
+      jev_provider: lastProvider,
       screenshot_base64_jpeg: screenshotBase64,
     };
   } catch (runError) {
@@ -565,7 +559,8 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       console_events_dropped: consoleDropped,
       usage: { ...budget.usage },
       elapsed_ms: Math.round(performance.now() - started),
-      model: MODEL,
+      model: lastModel ?? MODEL,
+      jev_provider: lastProvider,
     };
   } finally {
     clearTimeout(deadlineTimer);

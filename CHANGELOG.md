@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0
+
+- OpenRouter support: with only an `OPENROUTER_API_KEY`, Jev judgments route through OpenRouter's Decisions API (alpha), so one OpenRouter key can power the entire package, typing included. `JEV_PROVIDER` forces `typesafe` or `openrouter`; `jev-latest` maps to `typesafe/jev-1.13` on OpenRouter.
+- Results now report the transport used (`jev_provider`, resolved `model`).
+
 ## 0.1.0
 
 Initial release, published to npm as `@jkudish/jev-browser` (the unscoped `jev-browser` name belongs to another project).
