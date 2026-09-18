@@ -186,11 +186,16 @@ With no provider at all, typing falls back to a keyword heuristic built from the
 | --- | --- | --- |
 | `TYPESAFE_API_KEY` | none | TypeSafe direct. Default provider when set. |
 | `OPENROUTER_API_KEY` | none | Powers both the Jev judgments (when `TYPESAFE_API_KEY` is absent) and, optionally, the typing model. One key runs everything. |
-| `JEV_PROVIDER` | `auto` | Force `typesafe` or `openrouter` for the Jev calls instead of auto-detection. |
+| `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | none | Cloudflare Workers AI for the Jev judgments; used when no other provider key is present. |
+| `JEV_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, or `cloudflare` for the Jev calls instead of auto-detection. |
 | `JEV_BROWSER_MODEL` | `jev-latest` | Pin a Jev version, or `typesafe/jev-1.13` on OpenRouter. |
 | `JEV_BROWSER_TYPE_*` | see above | Typing provider, model, and endpoint. |
 | `JEV_BROWSER_HEADED` | unset | Set to `1` to watch the browser. |
 | `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD` | unset | Set to `1` to skip the Chromium postinstall. |
+
+### Cloudflare
+
+With `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set (and no other provider key), judgments run through Cloudflare Workers AI at `typesafe/jev`, the single always-current alias. Usage tokens come back on every call. Cloudflare serves one alias rather than pinned versions, and pricing is listed in the Cloudflare dashboard. Direct TypeSafe remains the recommended default when you have several keys.
 
 ### OpenRouter
 

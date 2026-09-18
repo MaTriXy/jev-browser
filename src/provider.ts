@@ -5,7 +5,7 @@
 
 import { TypeSafeClient } from "@typesafe-ai/sdk";
 
-export type JevProvider = "typesafe" | "openrouter";
+export type JevProvider = "typesafe" | "openrouter" | "cloudflare";
 
 export interface AskResult {
   answers: Record<string, any>;
@@ -31,9 +31,15 @@ function resolve(env: NodeJS.ProcessEnv): JevProvider {
     if (!hasOpenRouter) throw new Error("JEV_PROVIDER=openrouter but OPENROUTER_API_KEY is not set or not an sk-or- key.");
     return "openrouter";
   }
+  const hasCloudflare = Boolean(env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ACCOUNT_ID);
+  if (explicit === "cloudflare") {
+    if (!hasCloudflare) throw new Error("JEV_PROVIDER=cloudflare but CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are not both set.");
+    return "cloudflare";
+  }
   if (hasTypesafe) return "typesafe";
   if (hasOpenRouter) return "openrouter";
-  throw new Error("No TYPESAFE_API_KEY or OPENROUTER_API_KEY (sk-or-) found. Set one, or JEV_PROVIDER to choose explicitly.");
+  if (hasCloudflare) return "cloudflare";
+  throw new Error("No TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), or CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID found. Set one, or JEV_PROVIDER to choose explicitly.");
 }
 
 export async function askJev(
@@ -90,5 +96,32 @@ export async function askJev(
     usage: { input_tokens: body.usage?.input_tokens ?? 0, output_tokens: body.usage?.output_tokens ?? 0 },
     provider,
     model: slug,
+  };
+
+  // Cloudflare Workers AI wraps the same contract in {model, input} and the
+  // v4 {result, success} envelope. Single alias; no version pinning.
+  const cfSlug = model.startsWith("typesafe/") ? model : `typesafe/${model === "jev-latest" ? "jev" : model}`;
+  const cfResponse = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/run`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model: cfSlug, input: { state, questions } }),
+      signal,
+    },
+  );
+  const cfBody = await cfResponse.json().catch(() => ({}));
+  if (!cfResponse.ok || cfBody.success === false) {
+    throw new Error(`Cloudflare AI run ${cfResponse.status}: ${JSON.stringify(cfBody.errors ?? cfBody).slice(0, 200)}`);
+  }
+  const cfPayload = cfBody.result ?? cfBody;
+  return {
+    answers: cfPayload.answers ?? {},
+    usage: { input_tokens: cfPayload.usage?.input_tokens ?? 0, output_tokens: cfPayload.usage?.output_tokens ?? 0 },
+    provider,
+    model: cfPayload.model ?? cfSlug,
   };
 }

@@ -1,6 +1,6 @@
 {
   "name": "@jkudish/jev-browser",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A Jev-driven browser agent as an MCP tool: give it a task and a start URL; it navigates with typed Choice actions, a typed-input cascade, and stop/stuck safety gates.",
   "type": "module",
   "license": "MIT",
