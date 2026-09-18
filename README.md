@@ -200,6 +200,10 @@ With only an `OPENROUTER_API_KEY`, both the Jev judgments and (with no other typ
 
 Need the judgments without the browser? [Jev MCP](https://github.com/jkudish/jev-mcp) exposes the same model as three tools your agent can call anywhere: verify claims against evidence, screen content before it enters context, and rank candidates by meaning. The npm package is [@jkudish/jev-mcp](https://www.npmjs.com/package/@jkudish/jev-mcp).
 
+## Sponsoring
+
+If you find Jev Browser useful, consider becoming a [sponsor](https://github.com/sponsors/jkudish) or [donating](https://stripe.com/@jkudish).
+
 ## Development
 
 ```bash
