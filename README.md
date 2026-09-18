@@ -23,7 +23,9 @@ This is early software. Expect rough edges on harder sites. Issues and pull requ
 
 Searches GitHub for this repository, opens Releases, and answers a question about the page. Every Jev judgment is on the right: the action chosen, its confidence, and the goal and stuck probabilities for each step.
 
-<video src="assets/github-demo.mp4" controls muted loop></video>
+![jev-browser searching GitHub and opening its own Releases page, judgment trace on the right](assets/github-demo.gif)
+
+Full-resolution video: [assets/github-demo.mp4](assets/github-demo.mp4).
 
 ## Install
 
