@@ -50,19 +50,26 @@ From npm:
 npx -y @jkudish/jev-browser --help
 ```
 
-### Amp
+<details>
+<summary>Amp</summary>
 
 ```bash
 amp mcp add jev-browser -- npx -y @jkudish/jev-browser
 ```
 
-### Claude Code
+</details>
+
+<details>
+<summary>Claude Code</summary>
 
 ```bash
 claude mcp add jev-browser -- npx -y @jkudish/jev-browser
 ```
 
-### Codex (`~/.codex/config.toml`)
+</details>
+
+<details>
+<summary>Codex (<code>~/.codex/config.toml</code>)</summary>
 
 ```toml
 [mcp_servers.jev-browser]
@@ -70,7 +77,10 @@ command = "npx"
 args = ["-y", "@jkudish/jev-browser"]
 ```
 
-### OpenCode (`opencode.json`)
+</details>
+
+<details>
+<summary>OpenCode (<code>opencode.json</code>)</summary>
 
 ```json
 {
@@ -84,7 +94,10 @@ args = ["-y", "@jkudish/jev-browser"]
 }
 ```
 
-### Any other MCP client
+</details>
+
+<details>
+<summary>Any other MCP client</summary>
 
 ```json
 {
@@ -98,7 +111,35 @@ args = ["-y", "@jkudish/jev-browser"]
 }
 ```
 
+</details>
+
 Some MCP clients filter the environment before spawning servers, which silently drops `TYPESAFE_API_KEY`. If the server reports a missing key, pass it explicitly as shown above.
+
+## Without MCP: CLI and library
+
+The same agent runs from the command line. Result JSON is printed to stdout.
+
+```bash
+npx -y @jkudish/jev-browser run "Find the newest release and stop on it" https://github.com/jkudish/jev-browser/releases
+```
+
+Flags mirror the tool parameters: `--format`, `--max-chars`, `--max-steps`, `--max-seconds`, `--no-typing`, `--screenshot path.jpg`, `--record path.webm`. Run with `--help` for the full list.
+
+Or import it as a library. The package entry exports `navigate` side-effect free: importing it starts no server and no browser until you call it.
+
+```js
+import { navigate } from "@jkudish/jev-browser";
+
+const result = await navigate({
+  task: "Find the price of the Pro plan",
+  startUrl: "https://example.com/pricing",
+  format: "markdown",
+  maxSteps: 16,
+});
+
+console.log(result.status, result.final_url);
+console.log(result.page.content);
+```
 
 ## The tool
 

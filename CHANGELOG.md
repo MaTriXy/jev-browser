@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Public library entry: `import { navigate } from "@jkudish/jev-browser"` now works. The package root exports `navigate` and its option and result types side-effect free; the MCP server and CLI remain the `jev-browser` bin, and client configs are unchanged.
+
 ## 0.4.0
 
 - Recording support: `--record <path.webm|dir>` on the CLI and `recordDir` on `navigate()` capture a video of the page; results include `video_path` and per-step `t_ms` timestamps.

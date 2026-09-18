@@ -12,6 +12,12 @@
   "bin": {
     "jev-browser": "dist/index.js"
   },
+  "exports": {
+    ".": {
+      "types": "./dist/library.d.ts",
+      "default": "./dist/library.js"
+    }
+  },
   "files": [
     "dist",
     "scripts",
