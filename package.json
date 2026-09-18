@@ -1,7 +1,7 @@
 {
   "name": "@jkudish/jev-browser",
   "version": "0.4.0",
-  "description": "A Jev-driven browser agent as an MCP tool: give it a task and a start URL; it navigates with typed Choice actions, a typed-input cascade, and stop/stuck safety gates.",
+  "description": "A Jev-driven browser agent: give it a task and a start URL; typed Choice actions, stop/stuck safety gates, the final page, an auditable step trace, and a screenshot. MCP server, CLI, or library.",
   "type": "module",
   "license": "MIT",
   "author": "Joey Kudish",
@@ -12,10 +12,16 @@
   "bin": {
     "jev-browser": "dist/index.js"
   },
+  "main": "./dist/library.js",
+  "types": "./dist/library.d.ts",
   "exports": {
     ".": {
       "types": "./dist/library.d.ts",
       "default": "./dist/library.js"
+    },
+    "./dist/navigate.js": {
+      "types": "./dist/navigate.d.ts",
+      "default": "./dist/navigate.js"
     }
   },
   "files": [

@@ -123,7 +123,7 @@ The same agent runs from the command line. Result JSON is printed to stdout.
 npx -y @jkudish/jev-browser run "Find the newest release and stop on it" https://github.com/jkudish/jev-browser/releases
 ```
 
-Flags mirror the tool parameters: `--format`, `--max-chars`, `--max-steps`, `--max-seconds`, `--no-typing`, `--screenshot path.jpg`, `--record path.webm`. Run with `--help` for the full list.
+CLI options include `--format`, `--max-chars`, `--max-steps`, `--max-seconds`, `--no-typing`, `--screenshot path.jpg`, and `--record path.webm` (or a directory for Playwright's raw output). Run with `--help` for the full list.
 
 Or import it as a library. The package entry exports `navigate` side-effect free: importing it starts no server and no browser until you call it.
 
@@ -137,6 +137,7 @@ const result = await navigate({
   maxSteps: 16,
 });
 
+if ("error" in result) throw new Error(result.error);
 console.log(result.status, result.final_url);
 console.log(result.page.content);
 ```

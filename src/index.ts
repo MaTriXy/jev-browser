@@ -6,6 +6,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { createRequire } from "node:module";
 import { navigate } from "./navigate.js";
 import { runCli } from "./cli.js";
 
@@ -16,7 +17,10 @@ if (process.argv[2] === "--help" || process.argv[2] === "-h") {
   process.exit(await runCli(["--help"]));
 }
 
-const server = new McpServer({ name: "jev-browser", version: "0.1.0" });
+// Resolved at runtime so the MCP handshake version always matches the package.
+const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as { version: string };
+
+const server = new McpServer({ name: "jev-browser", version: packageVersion });
 
 server.registerTool(
   "jev_navigate",

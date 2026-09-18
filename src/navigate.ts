@@ -22,7 +22,6 @@ import {
 } from "./lib.js";
 import { selectOptionQuestion, stepQuestions } from "./questions.js";
 
-const MODEL = process.env.JEV_BROWSER_MODEL ?? "jev-latest";
 const MAX_CONSOLE_EVENTS = 200;
 const STATE_EXCERPT_CHARS = 1_500;
 
@@ -83,15 +82,18 @@ interface RunBudget {
   usage: JevUsage;
   signal: AbortSignal;
   deadlineAt: number; // performance.now() milliseconds
+  // Per-run model/provider state: resolved inside navigate() and mutated only
+  // by this run's askJev calls, so concurrent runs cannot report each other's
+  // provider and a failed run cannot inherit values from a previous one.
+  requestedModel: string;
+  model: string; // model reported by the most recent Jev call
+  provider: JevProvider | null;
 }
 
-let lastProvider: JevProvider | null = null;
-let lastModel: string | null = null;
-
 async function askJev(budget: RunBudget, state: unknown, questions: Record<string, unknown>) {
-  const result = await askProvider(state, questions, MODEL, budget.signal);
-  lastProvider = result.provider;
-  lastModel = result.model;
+  const result = await askProvider(state, questions, budget.requestedModel, budget.signal);
+  budget.provider = result.provider;
+  budget.model = result.model;
   budget.usage.jev_calls += 1;
   budget.usage.input_tokens += result.usage.input_tokens;
   budget.usage.output_tokens += result.usage.output_tokens;
@@ -317,10 +319,16 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
   if (externalSignal?.aborted) controller.abort(new Error("cancelled-by-caller"));
 
+  // The model is resolved per run, not at import time, so importing the
+  // library has no configuration side effects and env changes apply per call.
+  const requestedModel = process.env.JEV_BROWSER_MODEL ?? "jev-latest";
   const budget: RunBudget = {
     usage: { jev_calls: 0, input_tokens: 0, output_tokens: 0, est_cost_usd: 0 },
     signal: controller.signal,
     deadlineAt,
+    requestedModel,
+    model: requestedModel,
+    provider: null,
   };
   const remaining = () => Math.max(0, deadlineAt - performance.now());
   const bounded = (cap: number) => Math.max(250, Math.min(cap, remaining() || 250));
@@ -571,8 +579,8 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       console_events_dropped: consoleDropped,
       usage: { ...budget.usage },
       elapsed_ms: Math.round(performance.now() - started),
-      model: lastModel ?? MODEL,
-      jev_provider: lastProvider,
+      model: budget.model,
+      jev_provider: budget.provider,
       screenshot_base64_jpeg: screenshotBase64,
     };
   } catch (runError) {
@@ -586,8 +594,8 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       console_events_dropped: consoleDropped,
       usage: { ...budget.usage },
       elapsed_ms: Math.round(performance.now() - started),
-      model: lastModel ?? MODEL,
-      jev_provider: lastProvider,
+      model: budget.model,
+      jev_provider: budget.provider,
     };
   } finally {
     clearTimeout(deadlineTimer);

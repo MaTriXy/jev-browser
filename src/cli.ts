@@ -1,7 +1,7 @@
 // CLI: `jev-browser run "<task>" <start-url> [options]`
 // Everything else (no args) starts the MCP stdio server (src/index.ts).
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { navigate, type NavigateOptions } from "./navigate.js";
 
 interface CliArgs extends NavigateOptions {
@@ -81,38 +81,55 @@ export async function runCli(argv: string[]): Promise<number> {
 
   const { screenshotPath, recordPath, ...navigateArgs } = args;
   let recordDir: string | undefined;
+  let tempRecordDir: string | undefined;
   if (recordPath) {
-    recordDir = recordPath.endsWith(".webm") ? await import("node:fs/promises").then((fs) => fs.mkdtemp("jev-browser-record-")) : recordPath;
-  }
-  const result = (await navigate({
-    ...navigateArgs,
-    screenshot: screenshotPath ? "final" : (args.screenshot ?? "final"),
-    recordDir,
-  })) as Record<string, any>;
-  if (recordPath?.endsWith(".webm") && result.video_path) {
-    const fs = await import("node:fs/promises");
-    // Playwright can flush the video for a moment after close; wait for the
-    // source file to settle before copying, or the copy truncates.
-    let size = -1;
-    for (let i = 0; i < 20; i++) {
-      const stat = await fs.stat(result.video_path).catch(() => null);
-      const current = stat?.size ?? -1;
-      if (current === size && current > 0) break;
-      size = current;
-      await new Promise((r) => setTimeout(r, 500));
+    if (recordPath.endsWith(".webm")) {
+      // Scratch space lives under the OS temp directory, never the caller's
+      // working directory, and is removed after the video is copied out.
+      const os = await import("node:os");
+      const fs = await import("node:fs/promises");
+      tempRecordDir = await fs.mkdtemp(join(os.tmpdir(), "jev-browser-record-"));
+      recordDir = tempRecordDir;
+    } else {
+      recordDir = recordPath;
     }
-    await fs.copyFile(result.video_path, recordPath);
-    result.video_path = recordPath;
   }
+  try {
+    const result = (await navigate({
+      ...navigateArgs,
+      screenshot: screenshotPath ? "final" : (args.screenshot ?? "final"),
+      recordDir,
+    })) as Record<string, any>;
+    if (recordPath?.endsWith(".webm") && result.video_path) {
+      const fs = await import("node:fs/promises");
+      // Playwright can flush the video for a moment after close; wait for the
+      // source file to settle before copying, or the copy truncates.
+      let size = -1;
+      for (let i = 0; i < 20; i++) {
+        const stat = await fs.stat(result.video_path).catch(() => null);
+        const current = stat?.size ?? -1;
+        if (current === size && current > 0) break;
+        size = current;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      await fs.copyFile(result.video_path, recordPath);
+      result.video_path = recordPath;
+    }
 
-  if (screenshotPath && result.screenshot_base64_jpeg) {
-    await mkdir(dirname(screenshotPath), { recursive: true });
-    await writeFile(screenshotPath, Buffer.from(result.screenshot_base64_jpeg, "base64"));
-    result.screenshot_path = screenshotPath;
+    if (screenshotPath && result.screenshot_base64_jpeg) {
+      await mkdir(dirname(screenshotPath), { recursive: true });
+      await writeFile(screenshotPath, Buffer.from(result.screenshot_base64_jpeg, "base64"));
+      result.screenshot_path = screenshotPath;
+    }
+    // The CLI prints JSON; base64 screenshots belong in files, not terminals.
+    delete result.screenshot_base64_jpeg;
+
+    console.log(JSON.stringify(result, null, 2));
+    return result.status === "error" ? 1 : 0;
+  } finally {
+    if (tempRecordDir) {
+      const fs = await import("node:fs/promises");
+      await fs.rm(tempRecordDir, { recursive: true, force: true }).catch(() => {});
+    }
   }
-  // The CLI prints JSON; base64 screenshots belong in files, not terminals.
-  delete result.screenshot_base64_jpeg;
-
-  console.log(JSON.stringify(result, null, 2));
-  return result.status === "error" ? 1 : 0;
 }
