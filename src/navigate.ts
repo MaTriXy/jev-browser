@@ -273,8 +273,25 @@ async function pageObservables(page: Page, bounded: (cap: number) => number): Pr
 }
 
 async function settle(page: Page, bounded: (cap: number) => number) {
-  await page.waitForLoadState("networkidle", { timeout: bounded(3_000) }).catch(() => {});
-  await page.waitForTimeout(400);
+  await page.waitForLoadState("domcontentloaded", { timeout: bounded(8_000) }).catch(() => {});
+  // DOM-stability settle: two consecutive identical fingerprints mean the page
+  // has stopped re-rendering, which is the signal we actually want; quiet
+  // network was only ever a proxy for it, and analytics pings keep heavy sites
+  // permanently noisy. Capped; a page that never settles still gets acted on.
+  const deadline = performance.now() + bounded(1_500);
+  let prev: string | null = null;
+  while (performance.now() < deadline) {
+    const fingerprint = await page
+      .evaluate(
+        () =>
+          `${document.body?.innerText?.length ?? 0}:${document.querySelectorAll("a,button,input,select,textarea").length}`,
+      )
+      .catch(() => null);
+    if (fingerprint !== null && fingerprint === prev) return; // DOM went quiet
+    prev = fingerprint;
+    await page.waitForTimeout(250);
+  }
+  await page.waitForTimeout(400); // never settled; act anyway
 }
 
 // ── The loop ─────────────────────────────────────────────────────────────────
