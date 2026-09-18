@@ -6,6 +6,7 @@ import { navigate, type NavigateOptions } from "./navigate.js";
 
 interface CliArgs extends NavigateOptions {
   screenshotPath?: string;
+  recordPath?: string;
   help?: boolean;
 }
 
@@ -36,6 +37,9 @@ function parseArgs(argv: string[]): CliArgs {
       case "--no-screenshot":
         args.screenshot = "none";
         break;
+      case "--record":
+        args.recordPath = argv[++i];
+        break;
       case "--help":
       case "-h":
         args.help = true;
@@ -58,6 +62,9 @@ Options:
   --no-typing                          Disable typing into fields
   --screenshot <path>                  Write the final JPEG to this path
   --no-screenshot                      Skip the screenshot entirely
+  --record <path>                      Record a video of the page; a .webm path
+                                       saves to that file, any other value is a
+                                       directory for Playwright's output
   -h, --help                           Show this help
 
 Result JSON is printed to stdout. Environment: TYPESAFE_API_KEY required;
@@ -72,8 +79,31 @@ export async function runCli(argv: string[]): Promise<number> {
     return args.help ? 0 : 1;
   }
 
-  const { screenshotPath, ...navigateArgs } = args;
-  const result = (await navigate({ ...navigateArgs, screenshot: screenshotPath ? "final" : (args.screenshot ?? "final") })) as Record<string, any>;
+  const { screenshotPath, recordPath, ...navigateArgs } = args;
+  let recordDir: string | undefined;
+  if (recordPath) {
+    recordDir = recordPath.endsWith(".webm") ? await import("node:fs/promises").then((fs) => fs.mkdtemp("jev-browser-record-")) : recordPath;
+  }
+  const result = (await navigate({
+    ...navigateArgs,
+    screenshot: screenshotPath ? "final" : (args.screenshot ?? "final"),
+    recordDir,
+  })) as Record<string, any>;
+  if (recordPath?.endsWith(".webm") && result.video_path) {
+    const fs = await import("node:fs/promises");
+    // Playwright can flush the video for a moment after close; wait for the
+    // source file to settle before copying, or the copy truncates.
+    let size = -1;
+    for (let i = 0; i < 20; i++) {
+      const stat = await fs.stat(result.video_path).catch(() => null);
+      const current = stat?.size ?? -1;
+      if (current === size && current > 0) break;
+      size = current;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    await fs.copyFile(result.video_path, recordPath);
+    result.video_path = recordPath;
+  }
 
   if (screenshotPath && result.screenshot_base64_jpeg) {
     await mkdir(dirname(screenshotPath), { recursive: true });

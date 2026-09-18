@@ -35,10 +35,12 @@ export interface NavigateOptions {
   format?: "text" | "markdown" | "html" | "aria";
   maxChars?: number;
   screenshot?: "final" | "none";
+  recordDir?: string;
 }
 
 export interface StepRecord {
   step: number;
+  t_ms?: number; // milliseconds after run start when this step began
   proposed_action: string;
   executed_action: string | null; // null when a watcher stopped the loop before execution
   detail: string;
@@ -129,7 +131,7 @@ function resolveGeneratorModel(): { model: Parameters<typeof generateText>[0]["m
           baseURL: "https://openrouter.ai/api/v1",
           apiKey: process.env.OPENROUTER_API_KEY!,
         })(m),
-      defaultModel: "openai/gpt-5.6-luna",
+      defaultModel: "google/gemini-2.5-flash-lite",
     },
     {
       provider: "anthropic",
@@ -341,10 +343,14 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
 
   try {
     browser = await chromium.launch({ headless: process.env.JEV_BROWSER_HEADED !== "1" });
-    const context = await browser.newContext({ viewport: { width: 1024, height: 640 } });
+    const context = await browser.newContext({
+      viewport: { width: 1024, height: 640 },
+      ...(options.recordDir ? { recordVideo: { dir: options.recordDir } } : {}),
+    });
     // No Playwright default (30s) may ever outlive the run budget.
     context.setDefaultTimeout(8_000);
     let page = await context.newPage();
+    const videoPathPromise = options.recordDir ? page.video()?.path() : undefined;
     attachPageObservers(page);
     let pendingPage: Page | null = null;
     context.on("page", (p) => {
@@ -387,6 +393,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       const probabilities: Record<string, number> = actionAnswer.probabilities ?? {};
       const base = {
         step,
+        t_ms: Math.round(performance.now() - started),
         proposed_action: proposed,
         confidence: actionAnswer.confidence ?? null,
         top_probability: probabilities[proposed] ?? null,
@@ -531,8 +538,11 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       }
     }
 
+    await browser.close().catch(() => {});
+    const videoPath = (await videoPathPromise?.catch(() => undefined)) ?? null;
     return {
       status,
+      video_path: videoPath,
       final_url: finalObservables.url,
       final_title: finalObservables.title,
       format,
